@@ -3,26 +3,14 @@ const express = require("express");
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-/*
+/* =====================================================
    CORS
-   Allows the OrangeBrowse frontend to call this Render API
-   from a different domain.
-*/
+===================================================== */
+
 app.use((req, res, next) => {
-  res.setHeader(
-    "Access-Control-Allow-Origin",
-    "*"
-  );
-
-  res.setHeader(
-    "Access-Control-Allow-Methods",
-    "GET, OPTIONS"
-  );
-
-  res.setHeader(
-    "Access-Control-Allow-Headers",
-    "Content-Type, Accept"
-  );
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Accept");
 
   if (req.method === "OPTIONS") {
     return res.sendStatus(204);
@@ -40,8 +28,7 @@ const SEARXNG_URL =
   process.env.SEARXNG_URL ||
   "http://localhost:8080/search";
 
-
-const allowedCategories = [
+const allowedCategories = new Set([
   "general",
   "images",
   "videos",
@@ -49,15 +36,21 @@ const allowedCategories = [
   "map",
   "files",
   "social media"
-];
+]);
 
 
 /* =====================================================
    HELPERS
 ===================================================== */
 
-function getExistingImage(result) {
+function cleanText(value) {
+  return typeof value === "string"
+    ? value.replace(/\s+/g, " ").trim()
+    : "";
+}
 
+
+function getExistingImage(result) {
   return (
     result.thumbnail ||
     result.img_src ||
@@ -66,83 +59,54 @@ function getExistingImage(result) {
     result.image_url ||
     ""
   );
-
 }
 
 
 function makeAbsoluteUrl(value, baseUrl) {
-
-  if (!value) {
-    return "";
-  }
+  if (!value) return "";
 
   try {
-
-    return new URL(
-      value,
-      baseUrl
-    ).toString();
-
+    return new URL(value, baseUrl).toString();
   } catch {
-
     return "";
-
   }
-
 }
 
 
-/*
-   Extract Open Graph / Twitter image
-   from a normal webpage.
+/* =====================================================
+   EXTRACT PAGE IMAGE
+===================================================== */
 
-   This is only used when a normal web result
-   doesn't already contain an image.
-*/
 function extractPageImage(html, pageUrl) {
-
-  if (!html) {
-    return "";
-  }
+  if (!html) return "";
 
   const patterns = [
-
     /<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["'][^>]*>/i,
-
     /<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["'][^>]*>/i,
 
     /<meta[^>]+name=["']twitter:image["'][^>]+content=["']([^"']+)["'][^>]*>/i,
-
     /<meta[^>]+content=["']([^"']+)["'][^>]+name=["']twitter:image["'][^>]*>/i
-
   ];
 
   for (const pattern of patterns) {
-
-    const match =
-      html.match(pattern);
+    const match = html.match(pattern);
 
     if (match && match[1]) {
-
       return makeAbsoluteUrl(
         match[1],
         pageUrl
       );
-
     }
-
   }
 
   return "";
-
 }
 
 
-/*
-   Only fetch normal HTTP/HTTPS pages.
+/* =====================================================
+   FIND PAGE THUMBNAIL
+===================================================== */
 
-   Keep the request small and fast.
-*/
 async function findPageThumbnail(pageUrl) {
 
   if (!pageUrl) {
@@ -152,26 +116,17 @@ async function findPageThumbnail(pageUrl) {
   let parsed;
 
   try {
-
-    parsed =
-      new URL(pageUrl);
-
+    parsed = new URL(pageUrl);
   } catch {
-
     return "";
-
   }
-
 
   if (
     parsed.protocol !== "http:" &&
     parsed.protocol !== "https:"
   ) {
-
     return "";
-
   }
-
 
   try {
 
@@ -184,72 +139,54 @@ async function findPageThumbnail(pageUrl) {
         5000
       );
 
-
     const response =
       await fetch(
         parsed.toString(),
         {
           method: "GET",
-
           redirect: "follow",
-
-          signal:
-            controller.signal,
+          signal: controller.signal,
 
           headers: {
             "User-Agent":
               "Mozilla/5.0 (compatible; OrangeBrowse/1.0)",
+
             "Accept":
               "text/html,application/xhtml+xml"
           }
         }
       );
 
-
     clearTimeout(timeout);
-
 
     if (!response.ok) {
       return "";
     }
-
 
     const contentType =
       response.headers.get(
         "content-type"
       ) || "";
 
-
     if (
       !contentType.includes(
         "text/html"
       )
     ) {
-
       return "";
-
     }
 
-
-    /*
-       Don't download huge webpages.
-       We only need the beginning where
-       metadata normally exists.
-    */
     const reader =
       response.body?.getReader();
-
 
     if (!reader) {
       return "";
     }
 
-
     let html = "";
     let total = 0;
 
     const MAX_BYTES = 250000;
-
 
     while (total < MAX_BYTES) {
 
@@ -258,40 +195,29 @@ async function findPageThumbnail(pageUrl) {
         value
       } = await reader.read();
 
-
       if (done) {
         break;
       }
 
-
-      const chunk =
+      html +=
         new TextDecoder().decode(
           value
         );
 
-
-      html += chunk;
-
       total += value.length;
-
 
       if (
         html.includes(
           "</head>"
         )
       ) {
-
         break;
-
       }
-
     }
-
 
     try {
       await reader.cancel();
     } catch {}
-
 
     return extractPageImage(
       html,
@@ -301,9 +227,64 @@ async function findPageThumbnail(pageUrl) {
   } catch {
 
     return "";
-
   }
+}
 
+
+/* =====================================================
+   NORMALIZE RESULT
+===================================================== */
+
+function normalizeResult(result) {
+
+  const url =
+    result.url ||
+    result.link ||
+    result.href ||
+    "";
+
+  return {
+
+    title:
+      cleanText(
+        result.title
+      ) || url,
+
+    url,
+
+    content:
+      cleanText(
+        result.content ||
+        result.description ||
+        result.snippet ||
+        ""
+      ),
+
+    thumbnail:
+      getExistingImage(
+        result
+      ) || "",
+
+    img_src:
+      result.img_src ||
+      "",
+
+    engine:
+      Array.isArray(
+        result.engines
+      )
+        ? result.engines
+        : [],
+
+    category:
+      result.category ||
+      "",
+
+    publishedDate:
+      result.publishedDate ||
+      result.published_date ||
+      null
+  };
 }
 
 
@@ -336,29 +317,53 @@ app.get(
   "/search",
   async (req, res) => {
 
+    /*
+       IMPORTANT:
+
+       q is the exact text typed by the
+       OrangeBrowse user.
+    */
+
     const query =
-      String(
-        req.query.q || ""
-      ).trim();
+      cleanText(
+        String(
+          req.query.q ||
+          ""
+        )
+      );
 
 
-    const category =
-      String(
-        req.query.category ||
-        "general"
-      ).trim();
+    const requestedCategory =
+      cleanText(
+        String(
+          req.query.category ||
+          "general"
+        )
+      );
 
+
+    /*
+       Never allow page 0,
+       negative pages or NaN.
+    */
 
     const page =
       Math.max(
         1,
-        parseInt(
-          req.query.page ||
-          "1",
+
+        Number.parseInt(
+          String(
+            req.query.page ||
+            "1"
+          ),
           10
-        )
+        ) || 1
       );
 
+
+    /* =================================================
+       EMPTY QUERY
+    ================================================= */
 
     if (!query) {
 
@@ -366,23 +371,43 @@ app.get(
         400
       ).json({
 
+        ok: false,
+
         error:
-          "Missing search query"
+          "Missing search query",
+
+        query: "",
+
+        page,
+
+        results: [],
+
+        hasResults: false,
+
+        hasNextPage: false
 
       });
 
     }
 
 
+    /* =================================================
+       CATEGORY
+    ================================================= */
+
     const selectedCategory =
-      allowedCategories.includes(
-        category
+      allowedCategories.has(
+        requestedCategory
       )
-        ? category
+        ? requestedCategory
         : "general";
 
 
     try {
+
+      /* ===============================================
+         BUILD SEARXNG REQUEST
+      =============================================== */
 
       const url =
         new URL(
@@ -390,11 +415,19 @@ app.get(
         );
 
 
+      /*
+         EXACT SEARCH QUERY
+      */
+
       url.searchParams.set(
         "q",
         query
       );
 
+
+      /*
+         JSON RESPONSE
+      */
 
       url.searchParams.set(
         "format",
@@ -402,11 +435,19 @@ app.get(
       );
 
 
+      /*
+         IMPORTANT FOR PAGINATION
+      */
+
       url.searchParams.set(
         "pageno",
         String(page)
       );
 
+
+      /*
+         SEARCH CATEGORY
+      */
 
       url.searchParams.set(
         "categories",
@@ -414,13 +455,24 @@ app.get(
       );
 
 
+      /* ===============================================
+         REQUEST SEARXNG
+      =============================================== */
+
       const response =
         await fetch(
           url.toString(),
           {
+            method: "GET",
+
             headers: {
+
               Accept:
-                "application/json"
+                "application/json",
+
+              "User-Agent":
+                "OrangeBrowse/1.0"
+
             }
           }
         );
@@ -430,11 +482,17 @@ app.get(
         await response.text();
 
 
+      /* ===============================================
+         SEARXNG ERROR
+      =============================================== */
+
       if (!response.ok) {
 
         return res.status(
-          response.status
+          502
         ).json({
+
+          ok: false,
 
           error:
             "SearXNG returned HTTP " +
@@ -444,15 +502,31 @@ app.get(
             text.slice(
               0,
               1000
-            )
+            ),
+
+          query,
+
+          page,
+
+          category:
+            selectedCategory,
+
+          results: [],
+
+          hasResults: false,
+
+          hasNextPage: false
 
         });
 
       }
 
 
-      let data;
+      /* ===============================================
+         PARSE JSON
+      =============================================== */
 
+      let data;
 
       try {
 
@@ -467,80 +541,86 @@ app.get(
           502
         ).json({
 
+          ok: false,
+
           error:
-            "SearXNG did not return JSON."
+            "SearXNG did not return JSON.",
+
+          query,
+
+          page,
+
+          category:
+            selectedCategory,
+
+          results: [],
+
+          hasResults: false,
+
+          hasNextPage: false
 
         });
 
       }
 
 
-      /*
-         =================================================
-         GENERAL / ALL RESULT THUMBNAILS
-         =================================================
+      /* ===============================================
+         RAW RESULTS
+      =============================================== */
 
-         Images and videos are left untouched.
-
-         For normal web results:
-         1. Use image already returned by SearXNG.
-         2. If none exists, try the webpage's
-            og:image/twitter:image metadata.
-      */
-
-      if (
-        selectedCategory ===
-        "general" &&
+      const rawResults =
         Array.isArray(
           data.results
         )
+          ? data.results
+          : [];
+
+
+      /* ===============================================
+         NORMALIZE RESULTS
+      =============================================== */
+
+      const results =
+        rawResults
+          .map(
+            normalizeResult
+          )
+          .filter(
+            result =>
+              result.url
+          );
+
+
+      /* ===============================================
+         THUMBNAILS
+      =============================================== */
+
+      if (
+        selectedCategory ===
+          "general" &&
+        results.length
       ) {
 
-        /*
-           Only enrich a small number of results
-           so searches don't become unnecessarily slow.
-        */
-
         const resultsToEnrich =
-          data.results
-            .slice(0, 6);
+          results
+            .filter(
+              result =>
+                !result.thumbnail
+            )
+            .slice(
+              0,
+              6
+            );
 
 
         await Promise.all(
 
           resultsToEnrich.map(
-            async (result) => {
-
-              /*
-                 Don't replace an image that
-                 SearXNG already supplied.
-              */
-
-              if (
-                getExistingImage(
-                  result
-                )
-              ) {
-
-                return;
-
-              }
-
-
-              const resultUrl =
-                result.url ||
-                result.link ||
-                "";
-
-
-              if (!resultUrl) {
-                return;
-              }
-
+            async result => {
 
               const thumbnail =
                 await findPageThumbnail(
-                  resultUrl
+                  result.url
                 );
 
 
@@ -559,15 +639,154 @@ app.get(
       }
 
 
+      /* ===============================================
+         PAGINATION
+      =============================================== */
+
+      const hasResults =
+        results.length > 0;
+
+
+      /*
+         SearXNG does not expose one universal
+         last-page value for every engine.
+
+         Therefore an empty returned page means
+         there are definitely no more results.
+
+         A non-empty page allows OrangeBrowse
+         to request the next page.
+      */
+
+      const hasNextPage =
+        hasResults;
+
+
+      /* ===============================================
+         RESPONSE
+      =============================================== */
+
+      const payload = {
+
+        ok: true,
+
+        /*
+           EXACT QUERY SENT
+        */
+
+        query,
+
+        /*
+           EXACT PAGE RETURNED
+        */
+
+        page,
+
+        /*
+           CATEGORY USED
+        */
+
+        category:
+          selectedCategory,
+
+        /*
+           CLEAN RESULTS
+        */
+
+        results,
+
+        /*
+           RESULT COUNT
+        */
+
+        number_of_results:
+          results.length,
+
+        /*
+           WHETHER THIS PAGE HAS RESULTS
+        */
+
+        hasResults,
+
+        /*
+           WHETHER ORANGEBROWSE MAY REQUEST
+           ANOTHER PAGE
+        */
+
+        hasNextPage,
+
+        /*
+           SEARCH SUGGESTIONS
+        */
+
+        suggestions:
+          Array.isArray(
+            data.suggestions
+          )
+            ? data.suggestions
+            : [],
+
+        /*
+           DIRECT ANSWERS
+        */
+
+        answers:
+          Array.isArray(
+            data.answers
+          )
+            ? data.answers
+            : [],
+
+        /*
+           INFOBOX RESULTS
+        */
+
+        infoboxes:
+          Array.isArray(
+            data.infoboxes
+          )
+            ? data.infoboxes
+            : []
+
+      };
+
+
+      /* ===============================================
+         IMPORTANT CACHE CONTROL
+      ===============================================
+
+         Do NOT cache searches.
+
+         Otherwise:
+         Search A -> Search B
+
+         can sometimes receive
+         Search A's cached response.
+      */
+
       res.set(
         "Cache-Control",
-        "public, max-age=30"
+        "private, no-store"
+      );
+
+
+      res.set(
+        "X-OrangeBrowse-Query",
+        query
+      );
+
+
+      res.set(
+        "X-OrangeBrowse-Page",
+        String(page)
       );
 
 
       return res.status(
         200
-      ).json(data);
+      ).json(
+        payload
+      );
 
 
     } catch (error) {
@@ -576,11 +795,26 @@ app.get(
         502
       ).json({
 
+        ok: false,
+
         error:
           "Could not reach SearXNG.",
 
         details:
-          error.message
+          error.message,
+
+        query,
+
+        page,
+
+        category:
+          selectedCategory,
+
+        results: [],
+
+        hasResults: false,
+
+        hasNextPage: false
 
       });
 
