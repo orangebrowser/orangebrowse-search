@@ -10,8 +10,29 @@ search:
     - json
 
 server:
-  secret_key: "CHANGE_THIS_IN_RENDER"
+  secret_key: "CHANGE_THIS_TO_A_LONG_RANDOM_SECRET"
   limiter: false
   image_proxy: true
   public_instance: false
   bind_address: "0.0.0.0"
+
+engines:
+  - name: duckduckgo
+    engine: duckduckgo
+    shortcut: ddg
+    disabled: false
+
+  - name: brave
+    engine: brave
+    shortcut: br
+    disabled: false
+
+  - name: google
+    engine: google
+    shortcut: go
+    disabled: false
+
+  - name: bing
+    engine: bing
+    shortcut: bi
+    disabled: false
