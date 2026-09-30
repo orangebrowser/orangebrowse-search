@@ -1,0 +1,17 @@
+use_default_settings: true
+
+general:
+  instance_name: "OrangeBrowse Search"
+
+search:
+  safe_search: 1
+  formats:
+    - html
+    - json
+
+server:
+  secret_key: "CHANGE_THIS_IN_RENDER"
+  limiter: false
+  image_proxy: true
+  public_instance: false
+  bind_address: "0.0.0.0"
